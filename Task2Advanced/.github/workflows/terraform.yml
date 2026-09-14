@@ -1,0 +1,117 @@
+name: Terraform CI/CD (Task2Advanced)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Task2Advanced/**"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Окружение для plan/apply"
+        required: true
+        default: "dev"
+        type: choice
+        options: [dev, stage, prod]
+
+permissions:
+  contents: read
+
+# Один pipeline на окружение одновременно: исключает гонку за состояние и lock-конфликты.
+concurrency:
+  group: terraform-${{ inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.16.1"
+
+jobs:
+  plan:
+    name: Plan (${{ inputs.environment || 'dev' }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'dev' }}
+    defaults:
+      run:
+        working-directory: Task2Advanced
+    env:
+      TF_WORKSPACE: ${{ inputs.environment || 'dev' }}
+      VAR_FILE: envs/${{ inputs.environment || 'dev' }}/terraform.tfvars
+      YC_TOKEN: ${{ secrets.YC_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_ENDPOINT_URL_S3: ${{ secrets.AWS_ENDPOINT_URL_S3 }}
+      TF_VAR_cloud_id: ${{ vars.YC_CLOUD_ID }}
+      TF_VAR_folder_id: ${{ vars.YC_FOLDER_ID }}
+      TF_VAR_subnet_id: ${{ vars.YC_SUBNET_ID }}
+      TF_VAR_image_id: ${{ vars.YC_IMAGE_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform fmt (проверка формата всего кода задания)
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init (удалённый backend S3/MinIO)
+        run: terraform init -input=false
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan (workspace из TF_WORKSPACE, параметры из парного tfvars)
+        run: terraform plan -input=false -var-file="$VAR_FILE" -out=tfplan
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ inputs.environment || 'dev' }}
+          path: Task2Advanced/tfplan
+          retention-days: 5
+          if-no-files-found: error
+
+  apply:
+    name: Apply (${{ inputs.environment }})
+    # Apply — только вручную ("по кнопке"); для stage/prod environment содержит
+    # Required reviewers, т.е. job стартует после явного approval.
+    if: github.event_name == 'workflow_dispatch'
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    defaults:
+      run:
+        working-directory: Task2Advanced
+    env:
+      TF_WORKSPACE: ${{ inputs.environment }}
+      YC_TOKEN: ${{ secrets.YC_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_ENDPOINT_URL_S3: ${{ secrets.AWS_ENDPOINT_URL_S3 }}
+      TF_VAR_cloud_id: ${{ vars.YC_CLOUD_ID }}
+      TF_VAR_folder_id: ${{ vars.YC_FOLDER_ID }}
+      TF_VAR_subnet_id: ${{ vars.YC_SUBNET_ID }}
+      TF_VAR_image_id: ${{ vars.YC_IMAGE_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ inputs.environment }}
+          path: Task2Advanced
+
+      - name: Terraform init (подключение к тому же удалённому состоянию)
+        run: terraform init -input=false
+
+      - name: Terraform apply (утверждённый plan, без повторного ввода)
+        run: terraform apply -input=false tfplan
