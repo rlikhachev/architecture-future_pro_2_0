@@ -1,5 +1,4 @@
 # architecture-future_pro_2_0
-
 Учебный проект спринта 11, кейс «Будущее 2.0». 
 Результаты заданий — в директориях `Task1Advanced` … `Task5Advanced`.
 
