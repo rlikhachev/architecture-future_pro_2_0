@@ -1,2 +1,9 @@
 .idea
 .DS_Store
+.tmp/
+.env
+.terraform/
+*.tfstate*
+.tf-cli-config.tfrc
+.terraform.lock.hcl
+certs/
